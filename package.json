@@ -30,7 +30,9 @@
     "pip",
     "version",
     "upgrade",
-    "pypi"
+    "pypi",
+    "unused",
+    "imports"
   ],
   "icon": "images/icon.png",
   "main": "./out/extension.js",
@@ -76,6 +78,12 @@
         "title": "Show Dependency Info",
         "category": "Python Dep Lens",
         "icon": "$(info)"
+      },
+      {
+        "command": "pythonDepLens.scanUsage",
+        "title": "Scan for Unused Dependencies",
+        "category": "Python Dep Lens",
+        "icon": "$(search)"
       }
     ],
     "keybindings": [
@@ -83,6 +91,12 @@
         "command": "pythonDepLens.refreshVersions",
         "key": "ctrl+alt+shift+r",
         "mac": "cmd+alt+shift+r",
+        "when": "resourceFilename == pyproject.toml"
+      },
+      {
+        "command": "pythonDepLens.scanUsage",
+        "key": "ctrl+alt+shift+u",
+        "mac": "cmd+alt+shift+u",
         "when": "resourceFilename == pyproject.toml"
       }
     ],
@@ -152,193 +166,62 @@
           "minimum": 1,
           "maximum": 20,
           "description": "Maximum number of concurrent PyPI API requests"
+        },
+        "pythonDepLens.detectUnusedDependencies": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan Python source files to detect potentially unused dependencies. Packages used as CLI tools or plugins are excluded from detection."
         }
       }
     },
-    "bugs": {
-        "url": "https://github.com/apertacodex/python-dep-lens/issues"
-    },
-    "homepage": "https://github.com/apertacodex/python-dep-lens#readme",
-    "engines": {
-        "vscode": "^1.85.0"
-    },
-    "categories": [
-        "Programming Languages",
-        "Linters",
-        "Other"
-    ],
-    "keywords": [
-        "python",
-        "pyproject",
-        "toml",
-        "dependencies",
-        "uv",
-        "pip",
-        "version",
-        "upgrade",
-        "pypi"
-    ],
-    "icon": "images/logo.png",
-    "main": "./out/extension.js",
-    "activationEvents": [
-        "onStartupFinished"
-    ],
-    "contributes": {
-        "languages": [
-            {
-                "id": "toml",
-                "filenames": [
-                    "pyproject.toml"
-                ]
-            }
-        ],
-        "commands": [
-            {
-                "command": "pythonDepLens.refreshVersions",
-                "title": "Refresh Dependency Versions",
-                "category": "Python Dep Lens",
-                "icon": "$(refresh)"
-            },
-            {
-                "command": "pythonDepLens.upgradeDependency",
-                "title": "Upgrade Dependency",
-                "category": "Python Dep Lens",
-                "icon": "$(arrow-up)"
-            },
-            {
-                "command": "pythonDepLens.upgradeAllDependencies",
-                "title": "Upgrade All Dependencies",
-                "category": "Python Dep Lens",
-                "icon": "$(cloud-download)"
-            },
-            {
-                "command": "pythonDepLens.clearCache",
-                "title": "Clear Version Cache",
-                "category": "Python Dep Lens",
-                "icon": "$(trash)"
-            },
-            {
-                "command": "pythonDepLens.showDependencyInfo",
-                "title": "Show Dependency Info",
-                "category": "Python Dep Lens",
-                "icon": "$(info)"
-            }
-        ],
-        "keybindings": [
-            {
-                "command": "pythonDepLens.refreshVersions",
-                "key": "ctrl+alt+shift+r",
-                "mac": "cmd+alt+shift+r",
-                "when": "resourceFilename == pyproject.toml"
-            }
-        ],
-        "configuration": {
-            "title": "Python Dependency Lens",
-            "properties": {
-                "pythonDepLens.packageManager": {
-                    "type": "string",
-                    "default": "auto",
-                    "enum": [
-                        "auto",
-                        "uv",
-                        "pip"
-                    ],
-                    "enumDescriptions": [
-                        "Auto-detect: prefers uv if available, falls back to pip",
-                        "Always use uv for upgrades",
-                        "Always use pip for upgrades"
-                    ],
-                    "description": "Package manager to use for upgrading dependencies"
-                },
-                "pythonDepLens.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Enable or disable inline version hints"
-                },
-                "pythonDepLens.cacheTTLMinutes": {
-                    "type": "number",
-                    "default": 30,
-                    "minimum": 1,
-                    "maximum": 1440,
-                    "description": "How long to cache PyPI version lookups (in minutes)"
-                },
-                "pythonDepLens.showUpgradeCodeLens": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Show upgrade code lens buttons inline"
-                },
-                "pythonDepLens.showStatusBarItem": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Show dependency status in the status bar"
-                },
-                "pythonDepLens.decorationStyle": {
-                    "type": "string",
-                    "default": "both",
-                    "enum": [
-                        "inline",
-                        "codelens",
-                        "both"
-                    ],
-                    "enumDescriptions": [
-                        "Show latest version as inline decoration only",
-                        "Show upgrade button as CodeLens only",
-                        "Show both inline decoration and CodeLens"
-                    ],
-                    "description": "How to display version information"
-                },
-                "pythonDepLens.pypiRegistryUrl": {
-                    "type": "string",
-                    "default": "https://pypi.org/pypi",
-                    "description": "Custom PyPI registry URL (for private registries)"
-                },
-                "pythonDepLens.concurrentRequests": {
-                    "type": "number",
-                    "default": 8,
-                    "minimum": 1,
-                    "maximum": 20,
-                    "description": "Maximum number of concurrent PyPI API requests"
-                }
-            }
+    "menus": {
+      "editor/title": [
+        {
+          "command": "pythonDepLens.refreshVersions",
+          "when": "resourceFilename == pyproject.toml",
+          "group": "navigation"
         },
-        "menus": {
-            "editor/title": [
-                {
-                    "command": "pythonDepLens.refreshVersions",
-                    "when": "resourceFilename == pyproject.toml",
-                    "group": "navigation"
-                },
-                {
-                    "command": "pythonDepLens.upgradeAllDependencies",
-                    "when": "resourceFilename == pyproject.toml",
-                    "group": "navigation"
-                }
-            ],
-            "editor/context": [
-                {
-                    "command": "pythonDepLens.upgradeDependency",
-                    "when": "resourceFilename == pyproject.toml",
-                    "group": "pythonDepLens@1"
-                },
-                {
-                    "command": "pythonDepLens.refreshVersions",
-                    "when": "resourceFilename == pyproject.toml",
-                    "group": "pythonDepLens@2"
-                }
-            ]
+        {
+          "command": "pythonDepLens.upgradeAllDependencies",
+          "when": "resourceFilename == pyproject.toml",
+          "group": "navigation"
+        },
+        {
+          "command": "pythonDepLens.scanUsage",
+          "when": "resourceFilename == pyproject.toml",
+          "group": "navigation"
         }
-    },
-    "scripts": {
-        "vscode:prepublish": "npm run compile",
-        "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./",
-        "package": "vsce package"
-    },
-    "devDependencies": {
-        "@types/node": "^25.6.0",
-        "@types/vscode": "^1.85.0",
-        "@vscode/vsce": "^3.9.1",
-        "ovsx": "^0.10.11",
-        "typescript": "^6.0.3"
+      ],
+      "editor/context": [
+        {
+          "command": "pythonDepLens.upgradeDependency",
+          "when": "resourceFilename == pyproject.toml",
+          "group": "pythonDepLens@1"
+        },
+        {
+          "command": "pythonDepLens.refreshVersions",
+          "when": "resourceFilename == pyproject.toml",
+          "group": "pythonDepLens@2"
+        },
+        {
+          "command": "pythonDepLens.scanUsage",
+          "when": "resourceFilename == pyproject.toml",
+          "group": "pythonDepLens@3"
+        }
+      ]
     }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.108.1",
+    "@types/node": "^25.0.9",
+    "typescript": "^5.9.3",
+    "ovsx": "^0.10.8"
+  },
+  "dependencies": {}
 }

@@ -10,3 +10,9 @@ Makefile
 **/*.ts
 **/*.map
 .eslintrc*
+pnpm-lock.yaml
+pnpm-workspace.yaml
+package-lock.json
+.claude/**
+.factory/**
+out/upgradCodeLensProvider.*

@@ -7,6 +7,7 @@ import { VersionDecorationProvider } from './versionDecorationProvider';
 import { UpgradeCodeLensProvider } from './upgradeCodeLensProvider';
 import { PackageManagerService } from './packageManagerService';
 import { StatusBarManager } from './statusBarManager';
+import { UsageScanner, UsageMap } from './usageScanner';
 
 let logger: Logger;
 let pypiManager: PyPIManager;
@@ -14,6 +15,7 @@ let decorationProvider: VersionDecorationProvider;
 let codeLensProvider: UpgradeCodeLensProvider;
 let packageManagerService: PackageManagerService;
 let statusBarManager: StatusBarManager;
+let usageScanner: UsageScanner;
 let activeDecorateTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -25,9 +27,8 @@ export function activate(context: vscode.ExtensionContext): void {
     decorationProvider = new VersionDecorationProvider(logger);
     codeLensProvider = new UpgradeCodeLensProvider(pypiManager, logger);
     statusBarManager = new StatusBarManager();
+    usageScanner = new UsageScanner(logger);
 
-    // Register CodeLens provider — scheme:'file' matches all pyproject.toml files
-    // regardless of whether they are in the workspace root or a subdirectory
     context.subscriptions.push(
         vscode.languages.registerCodeLensProvider(
             { scheme: 'file', pattern: '**/pyproject.toml' },
@@ -56,6 +57,10 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('pythonDepLens.showDependencyInfo', (packageName: string) => {
             logger.info(`Command executed: showDependencyInfo for ${packageName}`);
             return handleShowInfo(packageName);
+        }),
+        vscode.commands.registerCommand('pythonDepLens.scanUsage', () => {
+            logger.info('Command executed: scanUsage');
+            return handleScanUsage();
         })
     );
 
@@ -100,6 +105,8 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.workspace.onDidSaveTextDocument((document) => {
             if (isPyprojectToml(document)) {
+                // Clear usage cache on save since deps may have changed
+                usageScanner.clearCache();
                 for (const editor of vscode.window.visibleTextEditors) {
                     if (editor.document === document) {
                         triggerDecoration(editor, 100);
@@ -109,13 +116,11 @@ export function activate(context: vscode.ExtensionContext): void {
         })
     );
 
-    // Listen for document open events to catch pyproject.toml files opened
-    // before the extension activated
+    // Listen for document open events
     context.subscriptions.push(
         vscode.workspace.onDidOpenTextDocument((document) => {
             if (isPyprojectToml(document)) {
                 setTimeout(() => {
-                    // Find any visible editor for this document (not just active)
                     for (const editor of vscode.window.visibleTextEditors) {
                         if (editor.document === document) {
                             logger.debug(`Document opened: ${document.uri.fsPath}`);
@@ -127,6 +132,13 @@ export function activate(context: vscode.ExtensionContext): void {
             }
         })
     );
+
+    // Watch for Python file changes to invalidate usage cache
+    const pyWatcher = vscode.workspace.createFileSystemWatcher('**/*.py');
+    context.subscriptions.push(pyWatcher);
+    pyWatcher.onDidChange(() => usageScanner.clearCache());
+    pyWatcher.onDidCreate(() => usageScanner.clearCache());
+    pyWatcher.onDidDelete(() => usageScanner.clearCache());
 
     // Watch for nested pyproject.toml files being created
     const watcher = vscode.workspace.createFileSystemWatcher('**/pyproject.toml');
@@ -148,6 +160,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.workspace.onDidChangeConfiguration((event) => {
             if (event.affectsConfiguration('pythonDepLens')) {
                 logger.info('Configuration changed, refreshing...');
+                usageScanner.clearCache();
                 const editor = vscode.window.activeTextEditor;
                 if (editor && isPyprojectToml(editor.document)) {
                     triggerDecoration(editor, 100);
@@ -172,12 +185,11 @@ export function activate(context: vscode.ExtensionContext): void {
     codeLensProvider.refresh();
 
     logger.info('Python Dependency Lens activated successfully!');
-    logger.info(`Registered commands: refreshVersions, upgradeDependency, upgradeAllDependencies, clearCache, showDependencyInfo`);
+    logger.info(`Registered commands: refreshVersions, upgradeDependency, upgradeAllDependencies, clearCache, showDependencyInfo, scanUsage`);
 }
 
 function isPyprojectToml(document: vscode.TextDocument): boolean {
     const fileName = document.fileName;
-    // Check both the filename and ensure it's not untitled
     return fileName.endsWith('pyproject.toml') && document.uri.scheme !== 'untitled';
 }
 
@@ -225,27 +237,38 @@ async function decorateEditor(editor: vscode.TextEditor): Promise<void> {
 
     const style = config.get<string>('decorationStyle', 'both');
     const showInline = style === 'inline' || style === 'both';
+    const detectUnused = config.get<boolean>('detectUnusedDependencies', true);
 
     statusBarManager.show(`$(sync~spin) Fetching versions for ${dependencies.length} deps...`);
 
     try {
-        const versionMap = await pypiManager.fetchLatestVersions(
-            dependencies.map(d => d.packageName)
-        );
+        const packageNames = dependencies.map(d => d.packageName);
+
+        // Fetch versions and usage in parallel
+        const [versionMap, usageMap] = await Promise.all([
+            pypiManager.fetchLatestVersions(packageNames),
+            detectUnused
+                ? usageScanner.scanUsage(packageNames, path.dirname(document.uri.fsPath))
+                : Promise.resolve(null)
+        ]);
 
         logger.debug(`Fetched versions for ${versionMap.size} packages`);
 
-        // Check if the editor/document is still valid and active
+        // Check if the editor/document is still valid
         if (editor.document.isClosed) {
             logger.debug('Document was closed before decorations could be applied');
             return;
         }
+
+        // Update the CodeLens provider with usage info
+        codeLensProvider.setUsageMap(usageMap);
 
         if (showInline) {
             const decorations: { dependency: ParsedDependency; latestVersion: string | null }[] = [];
             let outdatedCount = 0;
             let upToDateCount = 0;
             let errorCount = 0;
+            let unusedCount = 0;
 
             for (const dep of dependencies) {
                 const latestVersion = versionMap.get(dep.packageName) || null;
@@ -258,9 +281,13 @@ async function decorateEditor(editor: vscode.TextEditor): Promise<void> {
                 } else {
                     upToDateCount++;
                 }
+
+                if (usageMap && usageMap.get(dep.packageName) === false) {
+                    unusedCount++;
+                }
             }
 
-            decorationProvider.updateDecorations(editor, decorations);
+            decorationProvider.updateDecorations(editor, decorations, usageMap ?? undefined);
 
             const parts: string[] = [];
             if (outdatedCount > 0) {
@@ -269,20 +296,26 @@ async function decorateEditor(editor: vscode.TextEditor): Promise<void> {
             if (upToDateCount > 0) {
                 parts.push(`$(check) ${upToDateCount} up-to-date`);
             }
+            if (unusedCount > 0) {
+                parts.push(`$(circle-slash) ${unusedCount} unused`);
+            }
             if (errorCount > 0) {
                 parts.push(`$(warning) ${errorCount} errors`);
             }
             statusBarManager.show(parts.join('  '), 'pythonDepLens.refreshVersions');
         } else {
-            // Even if not showing inline, update status bar
             let outdatedCount = 0;
             let upToDateCount = 0;
+            let unusedCount = 0;
             for (const dep of dependencies) {
                 const latestVersion = versionMap.get(dep.packageName);
                 if (latestVersion && dep.currentVersion && !isVersionSatisfied(dep.currentVersion, latestVersion)) {
                     outdatedCount++;
                 } else if (latestVersion) {
                     upToDateCount++;
+                }
+                if (usageMap && usageMap.get(dep.packageName) === false) {
+                    unusedCount++;
                 }
             }
             const parts: string[] = [];
@@ -291,6 +324,9 @@ async function decorateEditor(editor: vscode.TextEditor): Promise<void> {
             }
             if (upToDateCount > 0) {
                 parts.push(`$(check) ${upToDateCount} up-to-date`);
+            }
+            if (unusedCount > 0) {
+                parts.push(`$(circle-slash) ${unusedCount} unused`);
             }
             statusBarManager.show(parts.join('  '), 'pythonDepLens.refreshVersions');
         }
@@ -305,7 +341,6 @@ async function decorateEditor(editor: vscode.TextEditor): Promise<void> {
 }
 
 function isVersionSatisfied(current: string, latest: string): boolean {
-    // Strip comparison operators for simple check
     const cleanCurrent = current.replace(/^[>=<~!^]+/, '').trim();
     const cleanLatest = latest.trim();
     return cleanCurrent === cleanLatest;
@@ -319,6 +354,7 @@ async function handleRefresh(): Promise<void> {
     }
 
     pypiManager.clearCache();
+    usageScanner.clearCache();
     codeLensProvider.refresh();
     await decorateEditor(editor);
     vscode.window.showInformationMessage('Python Dependency Lens: Versions refreshed!');
@@ -334,7 +370,6 @@ async function handleUpgrade(dep: ParsedDependency, latestVersion: string): Prom
     const managerPref = config.get<string>('packageManager', 'auto');
 
     try {
-        // First, update the version in the file
         const editor = vscode.window.activeTextEditor;
         if (!editor || !isPyprojectToml(editor.document)) {
             vscode.window.showErrorMessage('No pyproject.toml editor is active.');
@@ -349,7 +384,6 @@ async function handleUpgrade(dep: ParsedDependency, latestVersion: string): Prom
             logger.warn(`Could not update version in document for ${dep.packageName}`);
         }
 
-        // Then run the package manager install command
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
@@ -370,7 +404,6 @@ async function handleUpgrade(dep: ParsedDependency, latestVersion: string): Prom
             `${dep.packageName} upgraded to ${latestVersion} using ${manager}`
         );
 
-        // Refresh decorations
         pypiManager.clearCacheForPackage(dep.packageName);
         triggerDecoration(editor, 100);
     } catch (error) {
@@ -392,10 +425,7 @@ async function updateVersionInDocument(
     let newLineText: string | undefined;
 
     if (dep.versionOperator) {
-        // Replace existing version
-        // Use a flexible approach: find the package name in the line and replace the version part
         const escapedName = escapeRegex(dep.packageName);
-        // Try quoted format: "package>=version"
         const quotedRegex = new RegExp(
             `("${escapedName}\\s*)((?:[><=!~^]+)\\s*)([^"',\\]]+)(.*)`
         );
@@ -403,7 +433,6 @@ async function updateVersionInDocument(
         if (match) {
             newLineText = lineText.replace(quotedRegex, `$1>=${latestVersion}$4`);
         } else {
-            // Try table format: package = "version"
             const tableRegex = new RegExp(
                 `(${escapedName}\\s*=\\s*")((?:[><=!~^]+)\\s*)([^"]+)(")`
             );
@@ -411,7 +440,6 @@ async function updateVersionInDocument(
             if (tableMatch) {
                 newLineText = lineText.replace(tableRegex, `$1>=${latestVersion}$4`);
             } else {
-                // Try dict format: {version = "^version"}
                 const dictRegex = /(version\s*=\s*")((?:[><=!~^]+)\s*)([^"]+)(")/;
                 const dictMatch = lineText.match(dictRegex);
                 if (dictMatch) {
@@ -422,7 +450,6 @@ async function updateVersionInDocument(
             }
         }
     } else {
-        // No version specified, add one
         const escapedName = escapeRegex(dep.packageName);
         const regex = new RegExp(`"${escapedName}"`);
         if (lineText.match(regex)) {
@@ -441,9 +468,6 @@ async function updateVersionInDocument(
     return false;
 }
 
-/**
- * Escape special regex characters in a string.
- */
 function escapeRegex(str: string): string {
     return str.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 }
@@ -475,7 +499,6 @@ async function handleUpgradeAll(): Promise<void> {
 
     const config = getConfig();
     const managerPref = config.get<string>('packageManager', 'auto');
-
     const projectDir = path.dirname(editor.document.uri.fsPath);
 
     try {
@@ -524,7 +547,6 @@ async function handleUpgradeAll(): Promise<void> {
                     }
                 }
 
-                // Run install after all updates
                 try {
                     await packageManagerService.syncDependencies(manager, projectDir);
                 } catch (err) {
@@ -538,6 +560,7 @@ async function handleUpgradeAll(): Promise<void> {
         );
 
         pypiManager.clearCache();
+        usageScanner.clearCache();
         triggerDecoration(editor, 100);
     } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -548,13 +571,40 @@ async function handleUpgradeAll(): Promise<void> {
 
 function handleClearCache(): void {
     pypiManager.clearCache();
+    usageScanner.clearCache();
     codeLensProvider.refresh();
-    vscode.window.showInformationMessage('Python Dependency Lens: Version cache cleared.');
+    vscode.window.showInformationMessage('Python Dependency Lens: Version cache and usage cache cleared.');
 
     const editor = vscode.window.activeTextEditor;
     if (editor && isPyprojectToml(editor.document)) {
         triggerDecoration(editor, 100);
     }
+}
+
+/**
+ * Handle the "Scan Usage" command — force a fresh usage scan and re-decorate.
+ */
+async function handleScanUsage(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !isPyprojectToml(editor.document)) {
+        vscode.window.showInformationMessage('Open a pyproject.toml file first.');
+        return;
+    }
+
+    usageScanner.clearCache();
+
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Scanning project for unused dependencies...',
+            cancellable: false
+        },
+        async () => {
+            await decorateEditor(editor);
+        }
+    );
+
+    vscode.window.showInformationMessage('Python Dependency Lens: Usage scan complete!');
 }
 
 async function handleShowInfo(packageName: string): Promise<void> {
@@ -583,7 +633,6 @@ async function handleShowInfo(packageName: string): Promise<void> {
 }
 
 function generatePackageInfoHtml(info: { name: string; version: string; summary: string; homepage: string; license: string; author: string }): string {
-    // Escape HTML to prevent XSS
     const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
     const homepageHtml = info.homepage

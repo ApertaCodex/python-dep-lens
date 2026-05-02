@@ -30,7 +30,9 @@
         "pip",
         "version",
         "upgrade",
-        "pypi"
+        "pypi",
+        "unused",
+        "imports"
     ],
     "icon": "images/logo.png",
     "main": "./out/extension.js",
@@ -78,6 +80,12 @@
                 "title": "Show Dependency Info",
                 "category": "Python Dep Lens",
                 "icon": "$(info)"
+            },
+            {
+                "command": "pythonDepLens.scanUsage",
+                "title": "Scan for Unused Dependencies",
+                "category": "Python Dep Lens",
+                "icon": "$(search)"
             }
         ],
         "keybindings": [
@@ -85,6 +93,12 @@
                 "command": "pythonDepLens.refreshVersions",
                 "key": "ctrl+alt+shift+r",
                 "mac": "cmd+alt+shift+r",
+                "when": "resourceFilename == pyproject.toml"
+            },
+            {
+                "command": "pythonDepLens.scanUsage",
+                "key": "ctrl+alt+shift+u",
+                "mac": "cmd+alt+shift+u",
                 "when": "resourceFilename == pyproject.toml"
             }
         ],
@@ -154,6 +168,11 @@
                     "minimum": 1,
                     "maximum": 20,
                     "description": "Maximum number of concurrent PyPI API requests"
+                },
+                "pythonDepLens.detectUnusedDependencies": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Scan Python source files to detect potentially unused dependencies. Packages used as CLI tools or plugins are excluded from detection."
                 }
             }
         },
@@ -168,6 +187,11 @@
                     "command": "pythonDepLens.upgradeAllDependencies",
                     "when": "resourceFilename == pyproject.toml",
                     "group": "navigation"
+                },
+                {
+                    "command": "pythonDepLens.scanUsage",
+                    "when": "resourceFilename == pyproject.toml",
+                    "group": "navigation"
                 }
             ],
             "editor/context": [
@@ -180,6 +204,11 @@
                     "command": "pythonDepLens.refreshVersions",
                     "when": "resourceFilename == pyproject.toml",
                     "group": "pythonDepLens@2"
+                },
+                {
+                    "command": "pythonDepLens.scanUsage",
+                    "when": "resourceFilename == pyproject.toml",
+                    "group": "pythonDepLens@3"
                 }
             ]
         }

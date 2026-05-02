@@ -2,12 +2,14 @@ import * as vscode from 'vscode';
 import { Logger } from './logger';
 import { DependencyParser, ParsedDependency } from './dependencyParser';
 import { PyPIManager } from './pypiManager';
+import { UsageMap } from './usageScanner';
 
 export class UpgradeCodeLensProvider implements vscode.CodeLensProvider {
     private logger: Logger;
     private pypiManager: PyPIManager;
     private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
     public readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
+    private usageMap: UsageMap | null = null;
 
     constructor(pypiManager: PyPIManager, logger: Logger) {
         this.pypiManager = pypiManager;
@@ -16,6 +18,13 @@ export class UpgradeCodeLensProvider implements vscode.CodeLensProvider {
 
     public refresh(): void {
         this._onDidChangeCodeLenses.fire();
+    }
+
+    /**
+     * Update the usage map used for CodeLens annotations.
+     */
+    public setUsageMap(usageMap: UsageMap | null): void {
+        this.usageMap = usageMap;
     }
 
     public async provideCodeLenses(
@@ -75,6 +84,10 @@ export class UpgradeCodeLensProvider implements vscode.CodeLensProvider {
             const line = document.lineAt(dep.line);
             const range = new vscode.Range(dep.line, 0, dep.line, line.text.length);
 
+            // Check usage status
+            const isUsed = this.usageMap ? this.usageMap.get(dep.packageName) : undefined;
+            const unusedSuffix = (isUsed === false) ? ' (unused?)' : '';
+
             // Determine if outdated
             const cleanCurrent = dep.currentVersion?.replace(/^[>=<~!^]+/, '').trim();
             const isOutdated = !cleanCurrent || cleanCurrent !== latestVersion;
@@ -83,10 +96,10 @@ export class UpgradeCodeLensProvider implements vscode.CodeLensProvider {
                 // Upgrade button
                 codeLenses.push(
                     new vscode.CodeLens(range, {
-                        title: `$(arrow-up) Upgrade to ${latestVersion}`,
+                        title: `$(arrow-up) Upgrade to ${latestVersion}${unusedSuffix}`,
                         command: 'pythonDepLens.upgradeDependency',
                         arguments: [dep, latestVersion],
-                        tooltip: `Upgrade ${dep.packageName} to ${latestVersion}`
+                        tooltip: `Upgrade ${dep.packageName} to ${latestVersion}${isUsed === false ? ' — this dependency may be unused' : ''}`
                     })
                 );
 
@@ -103,10 +116,10 @@ export class UpgradeCodeLensProvider implements vscode.CodeLensProvider {
                 // Up to date indicator
                 codeLenses.push(
                     new vscode.CodeLens(range, {
-                        title: `$(check) ${latestVersion} (latest)`,
+                        title: `$(check) ${latestVersion} (latest)${unusedSuffix}`,
                         command: 'pythonDepLens.showDependencyInfo',
                         arguments: [dep.packageName],
-                        tooltip: `${dep.packageName} is up to date`
+                        tooltip: `${dep.packageName} is up to date${isUsed === false ? ' — but may be unused' : ''}`
                     })
                 );
             }

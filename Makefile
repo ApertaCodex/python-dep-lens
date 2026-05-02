@@ -2,8 +2,8 @@
 
 all: build
 
-build: clean patch-version
-	npm run compile && npx vsce package
+build: patch-version
+	npm run compile && vsce package
 
 patch-version:
 	@echo "Patching version..."
@@ -12,11 +12,11 @@ patch-version:
 install: build
 	@echo "Installing extension..."
 	@command -v code >/dev/null 2>&1 && code --install-extension ./*.vsix --force || true
-	@command -v code-insiders >/dev/null 2>&1 && code-insiders --install-extension ./*.vsix --force || true
 	@command -v cursor >/dev/null 2>&1 && cursor --install-extension ./*.vsix --force || true
 
 publish: build
-	npx vsce publish
+	vsce publish
 
 clean:
 	rm -f ./*.vsix
+	rm -rf ./out

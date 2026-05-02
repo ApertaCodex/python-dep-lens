@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
+import * as fs from 'fs';
 import { exec } from 'child_process';
 import { Logger } from './logger';
 
@@ -104,11 +106,20 @@ export class UsageScanner {
         packageNames: string[],
         usageMap: UsageMap
     ): Promise<boolean> {
+        const tmpFile = path.join(os.tmpdir(), `deptry-${Date.now()}.json`);
         const prefix = method === 'uv-run' ? 'uv run ' : '';
-        const cmd = `${prefix}deptry . --json-output /dev/stdout 2>/dev/null`;
+        const cmd = `${prefix}deptry . --json-output ${tmpFile}`;
 
         try {
-            const output = await this.execCommand(cmd, projectDir, 60_000);
+            await this.execCommand(cmd, projectDir, 60_000);
+
+            let output: string;
+            try {
+                output = fs.readFileSync(tmpFile, 'utf-8');
+            } catch {
+                this.logger.error('UsageScanner: deptry did not produce output file');
+                return false;
+            }
 
             let issues: DeptryIssue[];
             try {
@@ -133,7 +144,6 @@ export class UsageScanner {
 
             this.logger.debug(`UsageScanner: deptry found ${unusedModules.size} unused modules`);
 
-            // Map deptry module names back to our normalized package names
             for (const name of packageNames) {
                 const normalized = this.normalizeName(name);
                 if (unusedModules.has(normalized)) {
@@ -146,6 +156,8 @@ export class UsageScanner {
             const msg = err instanceof Error ? err.message : String(err);
             this.logger.error(`UsageScanner: deptry failed: ${msg}`);
             return false;
+        } finally {
+            try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
         }
     }
 

@@ -26,19 +26,14 @@ export function activate(context: vscode.ExtensionContext): void {
     codeLensProvider = new UpgradeCodeLensProvider(pypiManager, logger);
     statusBarManager = new StatusBarManager();
 
-    // Register CodeLens provider for pyproject.toml files
-    // Use both pattern-based and language-based selectors for maximum compatibility
-    const codeLensDisposable = vscode.languages.registerCodeLensProvider(
-        { pattern: '**/pyproject.toml' },
-        codeLensProvider
+    // Register CodeLens provider — scheme:'file' matches all pyproject.toml files
+    // regardless of whether they are in the workspace root or a subdirectory
+    context.subscriptions.push(
+        vscode.languages.registerCodeLensProvider(
+            { scheme: 'file', pattern: '**/pyproject.toml' },
+            codeLensProvider
+        )
     );
-    context.subscriptions.push(codeLensDisposable);
-
-    const codeLensDisposable2 = vscode.languages.registerCodeLensProvider(
-        { language: 'toml', pattern: '**/pyproject.toml' },
-        codeLensProvider
-    );
-    context.subscriptions.push(codeLensDisposable2);
 
     // Register all commands
     context.subscriptions.push(
@@ -72,6 +67,18 @@ export function activate(context: vscode.ExtensionContext): void {
                 triggerDecoration(editor);
             } else {
                 statusBarManager.hide();
+            }
+        })
+    );
+
+    // Catch pyproject.toml files revealed in split panes or newly visible tabs
+    context.subscriptions.push(
+        vscode.window.onDidChangeVisibleTextEditors((editors) => {
+            for (const editor of editors) {
+                if (isPyprojectToml(editor.document)) {
+                    logger.debug(`Editor became visible: ${editor.document.uri.fsPath}`);
+                    triggerDecoration(editor);
+                }
             }
         })
     );
@@ -152,19 +159,17 @@ export function activate(context: vscode.ExtensionContext): void {
     // Register disposables
     context.subscriptions.push(logger, statusBarManager, decorationProvider);
 
-    // Initial decoration for all visible pyproject.toml editors
-    const activeEditor = vscode.window.activeTextEditor;
-    if (activeEditor && isPyprojectToml(activeEditor.document)) {
-        logger.info(`Found already-open pyproject.toml: ${activeEditor.document.uri.fsPath}`);
-        triggerDecoration(activeEditor, 500);
-    }
-    // Also decorate all other visible pyproject.toml editors (nested projects)
-    for (const visibleEditor of vscode.window.visibleTextEditors) {
-        if (isPyprojectToml(visibleEditor.document) && visibleEditor !== activeEditor) {
-            logger.info(`Found visible pyproject.toml: ${visibleEditor.document.uri.fsPath}`);
-            triggerDecoration(visibleEditor, 500);
+    // Initial decoration for all currently visible pyproject.toml editors
+    for (const editor of vscode.window.visibleTextEditors) {
+        if (isPyprojectToml(editor.document)) {
+            logger.info(`Found visible pyproject.toml at startup: ${editor.document.uri.fsPath}`);
+            triggerDecoration(editor, 500);
         }
     }
+
+    // Also trigger CodeLens refresh so subdirectory files in background tabs
+    // get lenses as soon as they are opened
+    codeLensProvider.refresh();
 
     logger.info('Python Dependency Lens activated successfully!');
     logger.info(`Registered commands: refreshVersions, upgradeDependency, upgradeAllDependencies, clearCache, showDependencyInfo`);

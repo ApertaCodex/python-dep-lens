@@ -2,7 +2,7 @@
   "name": "python-dep-lens",
   "displayName": "Python Dependency Lens",
   "description": "Shows latest PyPI versions inline next to dependencies in pyproject.toml and provides one-click upgrade buttons using uv or pip",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "publisher": "apertacodex",
   "license": "MIT",
   "repository": {

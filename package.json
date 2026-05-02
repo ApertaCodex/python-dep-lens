@@ -86,6 +86,12 @@
         "title": "Scan for Unused Dependencies",
         "category": "Python Dep Lens",
         "icon": "$(search)"
+      },
+      {
+        "command": "pythonDepLens.removeDependency",
+        "title": "Remove Dependency",
+        "category": "Python Dep Lens",
+        "icon": "$(trash)"
       }
     ],
     "keybindings": [

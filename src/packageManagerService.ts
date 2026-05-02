@@ -95,6 +95,26 @@ export class PackageManagerService {
     }
 
     /**
+     * Remove/uninstall a dependency.
+     */
+    public async removeDependency(
+        manager: string,
+        packageName: string,
+        cwd: string
+    ): Promise<void> {
+        let command: string;
+
+        if (manager === 'uv') {
+            command = `uv remove "${packageName}"`;
+        } else {
+            command = `pip uninstall -y "${packageName}"`;
+        }
+
+        this.logger.info(`Running: ${command} in ${cwd}`);
+        await this.execCommand(command, cwd);
+    }
+
+    /**
      * Sync/install all dependencies after updating pyproject.toml.
      */
     public async syncDependencies(manager: string, cwd: string): Promise<void> {

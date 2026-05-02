@@ -55,7 +55,9 @@ export class UsageScanner {
 
         if (method !== 'none') {
             const success = await this.runDeptry(method, projectDir, packageNames, usageMap);
-            if (!success) {
+            if (success) {
+                await this.reconcileDynamicImports(usageMap, projectDir);
+            } else {
                 this.logger.warn('UsageScanner: deptry run failed, all deps marked as used');
             }
         } else {
@@ -159,6 +161,81 @@ export class UsageScanner {
         } finally {
             try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
         }
+    }
+
+    /**
+     * After deptry marks packages unused, do a secondary pass to rescue false positives:
+     * 1. Grep .py files for string references to the package's import name
+     * 2. Check [tool.X] sections in pyproject.toml for plugin-style packages
+     */
+    private async reconcileDynamicImports(
+        usageMap: UsageMap,
+        projectDir: string
+    ): Promise<void> {
+        const unusedPackages = [...usageMap.entries()]
+            .filter(([, used]) => !used)
+            .map(([name]) => name);
+
+        if (unusedPackages.length === 0) {
+            return;
+        }
+
+        this.logger.debug(`UsageScanner: reconciling ${unusedPackages.length} potentially unused packages`);
+
+        // Read pyproject.toml to check [tool.X] sections
+        let pyprojectContent = '';
+        try {
+            const pyprojectPath = path.join(projectDir, 'pyproject.toml');
+            pyprojectContent = fs.readFileSync(pyprojectPath, 'utf-8').toLowerCase();
+        } catch { /* ignore */ }
+
+        // Extract tool section names from pyproject.toml (e.g. [tool.pytest], [tool.pylint])
+        const toolSections = new Set<string>();
+        const toolRegex = /\[tool\.([^\]]+)\]/g;
+        let match: RegExpExecArray | null;
+        while ((match = toolRegex.exec(pyprojectContent)) !== null) {
+            toolSections.add(match[1].split('.')[0]);
+        }
+
+        for (const packageName of unusedPackages) {
+            const importName = this.toImportName(packageName);
+
+            // Check if the package name (minus common suffixes) matches a [tool.X] section
+            // e.g. pytest-cov -> pytest, pylint-django -> pylint
+            const baseName = packageName.split('-')[0].toLowerCase();
+            if (toolSections.has(baseName) || toolSections.has(importName)) {
+                this.logger.debug(`UsageScanner: rescued ${packageName} — referenced in [tool.${baseName}]`);
+                usageMap.set(packageName, true);
+                continue;
+            }
+
+            // Grep .py files for the import name as a string literal
+            try {
+                const found = await this.grepForString(importName, projectDir);
+                if (found) {
+                    this.logger.debug(`UsageScanner: rescued ${packageName} — found string reference "${importName}" in .py files`);
+                    usageMap.set(packageName, true);
+                }
+            } catch {
+                // grep failure is non-fatal
+            }
+        }
+    }
+
+    private toImportName(packageName: string): string {
+        return packageName.toLowerCase().replace(/[-_.]+/g, '_');
+    }
+
+    private grepForString(importName: string, projectDir: string): Promise<boolean> {
+        return new Promise((resolve) => {
+            // Use grep to search .py files for the import name as a string reference
+            // Exclude common non-source directories
+            const cmd = `grep -r --include="*.py" -l "${importName}" . --exclude-dir=.venv --exclude-dir=venv --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=__pycache__`;
+            exec(cmd, { cwd: projectDir, timeout: 15_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+                // grep exits 1 when nothing found
+                resolve(!error && stdout.trim().length > 0);
+            });
+        });
     }
 
     private normalizeName(name: string): string {

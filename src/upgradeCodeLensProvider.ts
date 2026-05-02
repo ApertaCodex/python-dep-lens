@@ -123,6 +123,16 @@ export class UpgradeCodeLensProvider implements vscode.CodeLensProvider {
                     })
                 );
             }
+
+            // Remove button for every dependency
+            codeLenses.push(
+                new vscode.CodeLens(range, {
+                    title: `$(trash) Remove`,
+                    command: 'pythonDepLens.removeDependency',
+                    arguments: [dep],
+                    tooltip: `Remove ${dep.packageName} from pyproject.toml and uninstall`
+                })
+            );
         }
 
         this.logger.debug(`CodeLens: returning ${codeLenses.length} code lenses`);

@@ -61,6 +61,10 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('pythonDepLens.scanUsage', () => {
             logger.info('Command executed: scanUsage');
             return handleScanUsage();
+        }),
+        vscode.commands.registerCommand('pythonDepLens.removeDependency', (dep: ParsedDependency) => {
+            logger.info(`Command executed: removeDependency for ${dep?.packageName}`);
+            return handleRemove(dep);
         })
     );
 
@@ -605,6 +609,78 @@ async function handleScanUsage(): Promise<void> {
     );
 
     vscode.window.showInformationMessage('Python Dependency Lens: Usage scan complete!');
+}
+
+async function handleRemove(dep: ParsedDependency): Promise<void> {
+    if (!dep) {
+        vscode.window.showErrorMessage('Python Dependency Lens: No dependency information provided.');
+        return;
+    }
+
+    const confirm = await vscode.window.showWarningMessage(
+        `Remove "${dep.packageName}" from pyproject.toml and uninstall it?`,
+        { modal: true },
+        'Remove'
+    );
+
+    if (confirm !== 'Remove') {
+        return;
+    }
+
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !isPyprojectToml(editor.document)) {
+        vscode.window.showErrorMessage('No pyproject.toml editor is active.');
+        return;
+    }
+
+    const config = getConfig();
+    const managerPref = config.get<string>('packageManager', 'auto');
+    const projectDir = path.dirname(editor.document.uri.fsPath);
+
+    try {
+        const manager = await packageManagerService.resolveManager(managerPref, projectDir);
+
+        // Delete the line from the document
+        const document = editor.document;
+        const line = document.lineAt(dep.line);
+        const deleteRange = new vscode.Range(
+            line.range.start,
+            line.range.end.translate(0, 0).with(dep.line + 1, 0)
+        );
+        const edit = new vscode.WorkspaceEdit();
+        // If this is the last line, delete including the preceding newline instead
+        if (dep.line === document.lineCount - 1 && dep.line > 0) {
+            const prevLine = document.lineAt(dep.line - 1);
+            edit.delete(document.uri, new vscode.Range(prevLine.range.end, line.range.end));
+        } else {
+            edit.delete(document.uri, deleteRange);
+        }
+        await vscode.workspace.applyEdit(edit);
+        await document.save();
+
+        // Uninstall the package
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: `Removing ${dep.packageName} using ${manager}...`,
+                cancellable: false
+            },
+            async () => {
+                await packageManagerService.removeDependency(manager, dep.packageName, projectDir);
+            }
+        );
+
+        vscode.window.showInformationMessage(`${dep.packageName} removed successfully using ${manager}`);
+
+        pypiManager.clearCacheForPackage(dep.packageName);
+        usageScanner.clearCache();
+        codeLensProvider.refresh();
+        triggerDecoration(editor, 100);
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error(`Failed to remove ${dep.packageName}: ${msg}`);
+        vscode.window.showErrorMessage(`Failed to remove ${dep.packageName}: ${msg}`);
+    }
 }
 
 async function handleShowInfo(packageName: string): Promise<void> {

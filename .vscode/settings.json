@@ -1,7 +1,13 @@
 {
     "cSpell.words": [
         "apertacodex",
+        "deptry",
+        "Deptry",
+        "pycache",
+        "pylint",
         "pypi",
-        "pyproject"
+        "pyproject",
+        "pytest",
+        "venv"
     ]
 }
